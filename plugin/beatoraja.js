@@ -257,6 +257,7 @@ async function _tryAutoSetup() {
     if (!statusRes.ok) return;
     const status = await statusRes.json();
     if (status.patchInstalled) return;
+    if (!status.config?.dir) return;
 
     const gs = _globalSettings.get();
     const setupRes = await fetch(`${base}/setup`, {
@@ -545,12 +546,14 @@ dmn.plugin.defineElement({
       "status.launchFailed.hint":     "Run start.bat in beatoraja-bridge folder",
       "status.setupDone":         "Restart the game for real-time detection",
       "status.setupFail":         "Auto-setup failed — run the game first",
-      "label.player":  "PLAYER",
-      "label.playing": "PLAYING",
-      "label.last":    "LAST PLAYED",
-      "label.idle":    "IDLE",
+      "label.player":     "PLAYER",
+      "label.playing":    "PLAYING",
+      "label.last":       "LAST PLAYED",
+      "label.idle":       "IDLE",
+      "label.noGameDir":  "NOT FOUND",
       "ph.title":  "No song selected",
       "ph.artist": "-",
+      "status.noGameDir.hint": "Game not found — run the game or set the path in Server Settings",
     },
     ko: {
       "menu.create":          "BMS Now Playing 패널 생성",
@@ -616,12 +619,14 @@ dmn.plugin.defineElement({
       "status.launchFailed.hint":     "beatoraja-bridge 폴더의 start.bat을 실행하세요",
       "status.setupDone":         "게임을 재시작하면 실시간 감지가 시작됩니다",
       "status.setupFail":         "자동 설정 실패 — 게임을 먼저 실행하세요",
-      "label.player":  "플레이어",
-      "label.playing": "플레이 중",
-      "label.last":    "마지막 플레이",
-      "label.idle":    "대기",
+      "label.player":     "플레이어",
+      "label.playing":    "플레이 중",
+      "label.last":       "마지막 플레이",
+      "label.idle":       "대기",
+      "label.noGameDir":  "미감지",
       "ph.title":  "선택된 곡 없음",
       "ph.artist": "-",
+      "status.noGameDir.hint": "게임을 찾을 수 없습니다 — 게임을 실행하거나 서버 설정에서 경로를 지정하세요",
     },
   },
 
@@ -688,7 +693,7 @@ dmn.plugin.defineElement({
     `;
 
     const fontLink = html`<link
-      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+      href="https://unpkg.com/pretendard/dist/web/static/pretendard.css"
       rel="stylesheet"
     />`;
 
@@ -714,17 +719,21 @@ dmn.plugin.defineElement({
     }
 
     // ── 연결됨 ──
+    const diag       = data?._diag || {};
+    const noGameDir  = connected && !diag.dir;
     const playerName = settings.playerLabel || data?.player || "Player1";
     const hasSong    = data && data.song && data.state !== "idle";
     const isPlaying  = hasSong && data.state === "playing";
     const isResult   = hasSong && data.state === "result";
 
-    const statusHex   = isPlaying ? "#4ADE80" : isResult ? cPlayerName : "#9CA3AF";
-    const statusLabel = isPlaying
-      ? t("label.playing")
-      : isResult
-        ? t("label.last")
-        : t("label.idle");
+    const statusHex   = noGameDir ? "#F59E0B" : isPlaying ? "#4ADE80" : isResult ? cPlayerName : "#9CA3AF";
+    const statusLabel = noGameDir
+      ? t("label.noGameDir")
+      : isPlaying
+        ? t("label.playing")
+        : isResult
+          ? t("label.last")
+          : t("label.idle");
 
     const song  = hasSong ? data.song  : null;
     const chart = hasSong ? data.chart : null;
@@ -743,13 +752,15 @@ dmn.plugin.defineElement({
     const titleOpacity  = hasSong ? 1 : 0.3;
     const artistOpacity = hasSong ? 0.55 : 0.2;
 
-    const statusMsg = !hasSong
-      ? setupStatus === "done"
-        ? t("status.setupDone")
-        : setupStatus === "fail"
-          ? t("status.setupFail")
-          : ""
-      : "";
+    const statusMsg = noGameDir
+      ? t("status.noGameDir.hint")
+      : !hasSong
+        ? setupStatus === "done"
+          ? t("status.setupDone")
+          : setupStatus === "fail"
+            ? t("status.setupFail")
+            : ""
+        : "";
 
     const dimStyle = `font-size:${sz.dim}px;opacity:0.4;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:2px;`;
 
@@ -897,15 +908,15 @@ dmn.plugin.defineElement({
 
         <!-- 셋업 상태 -->
         ${statusMsg
-          ? html`<div style="font-size:${sz.dim}px;opacity:0.35;text-align:center;padding:4px 0;color:${cPlayerLabel};">${statusMsg}</div>`
+          ? html`<div style="font-size:${sz.dim}px;opacity:${noGameDir ? 0.6 : 0.35};text-align:center;padding:4px 0;color:${noGameDir ? "#F59E0B" : cPlayerLabel};">${statusMsg}</div>`
           : ""}
 
         <!-- 하단 연결 상태 -->
         ${settings.showStatusBar !== false
           ? html`
             <div style="font-size:${sz.dim}px;opacity:${statusBarOp};color:${cStatusBar};margin-top:auto;display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;justify-content:${justify};">
-              <span style="width:5px;height:5px;border-radius:50%;background:${cStatusDot};display:inline-block;flex-shrink:0;"></span>
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${bridgeHost}</span>
+              <span style="width:5px;height:5px;border-radius:50%;background:${noGameDir ? "#F59E0B" : cStatusDot};display:inline-block;flex-shrink:0;"></span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${bridgeHost}${diag.method ? ` · ${diag.game || "beatoraja"} · ${diag.method}` : ""}${noGameDir ? " · ⚠" : ""}</span>
             </div>
           `
           : ""}

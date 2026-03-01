@@ -33,18 +33,32 @@ const FORCE_GAME = getArg("--game") || null; // "beatoraja" | "qwilight"
 
 // ─── 게임 경로 자동 탐지 ──────────────────────────────────────────────────────
 
+const HOME = process.env.USERPROFILE || process.env.HOME || "";
 const DEFAULT_CANDIDATES = [
   FORCE_DIR,
+  // beatoraja 일반적 경로
   "C:/beatoraja",
   "D:/beatoraja",
+  "E:/beatoraja",
   "C:/Games/beatoraja",
   "D:/Games/beatoraja",
   "C:/Users/Public/beatoraja",
+  HOME && path.join(HOME, "beatoraja"),
+  HOME && path.join(HOME, "Desktop", "beatoraja"),
+  HOME && path.join(HOME, "Downloads", "beatoraja"),
+  HOME && path.join(HOME, "Documents", "beatoraja"),
+  // lr2oraja 일반적 경로
   "C:/lr2oraja",
   "D:/lr2oraja",
+  "E:/lr2oraja",
   "C:/Games/lr2oraja",
   "D:/Games/lr2oraja",
   "C:/Users/Public/lr2oraja",
+  HOME && path.join(HOME, "lr2oraja"),
+  HOME && path.join(HOME, "Desktop", "lr2oraja"),
+  HOME && path.join(HOME, "Downloads", "lr2oraja"),
+  HOME && path.join(HOME, "Documents", "lr2oraja"),
+  // 현재 디렉토리 기준
   path.join(process.cwd(), ".."),
   process.cwd(),
 ].filter(Boolean);
@@ -62,32 +76,58 @@ function detectGameProcess() {
   const patterns = ["beatoraja", "lr2oraja"];
 
   for (const pattern of patterns) {
+    // 1차: wmic (구형 Windows 호환)
     try {
       const raw = execSync(
         `wmic process where "commandline like '%${pattern}%'" get executablepath /format:list`,
         { encoding: "utf8", timeout: 5000, windowsHide: true }
       );
       const match = raw.match(/ExecutablePath=(.+)/);
-      if (!match) continue;
-
-      const exePath = match[1].trim();
-      // javaw.exe 경로: <installDir>\jre\bin\javaw.exe → 2단계 상위
-      let candidate = path.dirname(path.dirname(path.dirname(exePath)));
-
-      // 검증: songdata.db 또는 beatoraja.jar/lr2oraja.jar 존재 확인
-      if (fs.existsSync(path.join(candidate, "songdata.db")) ||
-          fs.existsSync(path.join(candidate, "beatoraja.jar")) ||
-          fs.existsSync(path.join(candidate, "lr2oraja.jar"))) {
-        return candidate;
+      if (match) {
+        const result = _resolveGameDir(match[1].trim());
+        if (result) return result;
       }
+    } catch {}
 
-      // jre 없이 직접 실행된 경우: <installDir>\bin\javaw.exe → 1단계 상위에서 재시도
-      candidate = path.dirname(path.dirname(exePath));
-      if (fs.existsSync(path.join(candidate, "songdata.db"))) {
-        return candidate;
+    // 2차: PowerShell (wmic deprecated in newer Windows)
+    try {
+      const raw = execSync(
+        `powershell -NoProfile -Command "Get-Process -ErrorAction SilentlyContinue | Where-Object {$_.Path -and $_.CommandLine -like '*${pattern}*'} | Select-Object -First 1 -ExpandProperty Path"`,
+        { encoding: "utf8", timeout: 8000, windowsHide: true }
+      );
+      const exePath = raw.trim();
+      if (exePath) {
+        const result = _resolveGameDir(exePath);
+        if (result) return result;
       }
     } catch {}
   }
+  return null;
+}
+
+function _resolveGameDir(exePath) {
+  // javaw.exe 경로: <installDir>\jre\bin\javaw.exe → 2단계 상위
+  let candidate = path.dirname(path.dirname(path.dirname(exePath)));
+
+  // 검증: songdata.db 또는 beatoraja.jar/lr2oraja.jar 존재 확인
+  if (fs.existsSync(path.join(candidate, "songdata.db")) ||
+      fs.existsSync(path.join(candidate, "beatoraja.jar")) ||
+      fs.existsSync(path.join(candidate, "lr2oraja.jar"))) {
+    return candidate;
+  }
+
+  // jre 없이 직접 실행된 경우: <installDir>\bin\javaw.exe → 1단계 상위에서 재시도
+  candidate = path.dirname(path.dirname(exePath));
+  if (fs.existsSync(path.join(candidate, "songdata.db"))) {
+    return candidate;
+  }
+
+  // exe가 직접 게임 디렉토리에 있는 경우
+  candidate = path.dirname(exePath);
+  if (fs.existsSync(path.join(candidate, "songdata.db"))) {
+    return candidate;
+  }
+
   return null;
 }
 
@@ -759,9 +799,21 @@ function readPlayerName(gameDir) {
 
 // ─── 초기화 / 재구성 ─────────────────────────────────────────────────────────
 
-function applyConfig(newConfig) {
+// 직전 적용된 설정 해시 (중복 재구성 방지)
+let _lastConfigHash = "";
+
+function applyConfig(newConfig, force = false) {
+  const merged = { ...config, ...newConfig };
+  const hash = JSON.stringify([merged.game, merged.method, merged.dir, merged.luaStatePath, merged.customApiUrl]);
+
+  if (!force && hash === _lastConfigHash) {
+    // 설정 변경 없음 → watcher 리셋 불필요
+    return;
+  }
+  _lastConfigHash = hash;
+
   // config 병합
-  config = { ...config, ...newConfig };
+  config = merged;
 
   // 모든 watcher/폴링 정리
   stopLuaWatcher();
@@ -894,14 +946,64 @@ const server = http.createServer(async (req, res) => {
             source:  "lua+score",
           };
         } else {
+          // Lua score 안전 보정 (구 버전 훅 호환 포함)
+          let luaScore = luaData.score ? { ...luaData.score } : null;
+          if (luaScore) {
+            const maxEx = (luaData.song?.notes || 0) * 2;
+
+            // 구 버전 훅 감지: exScore가 이론상 최대(notes×2)를 초과하면
+            // 구 훅 공식 (actualEX×2 + maxEX)으로 역산하여 보정
+            if (maxEx > 0 && luaScore.exScore > maxEx) {
+              luaScore.exScore = Math.round((luaScore.exScore - maxEx) / 2);
+            }
+
+            // rate 재계산 (구 훅/신 훅 모두 적용)
+            if (maxEx > 0) {
+              luaScore.rate = Math.min(Math.round(luaScore.exScore / maxEx * 10000) / 100, 100);
+            }
+
+            // miss 보정 (신 훅: bad+poor 필드 존재 시)
+            if (luaScore.miss == null && luaScore.bad != null && luaScore.poor != null) {
+              luaScore.miss = (luaScore.bad || 0) + (luaScore.poor || 0);
+            }
+
+            // combo: maxCombo가 있으면 combo에 반영 (음악 선택 등에서 현재 콤보가 0일 때)
+            if (luaScore.maxCombo > 0 && luaScore.maxCombo > (luaScore.combo || 0)) {
+              luaScore.combo = luaScore.maxCombo;
+            }
+          }
+
           out = {
             state:   (s === "decide" || s === "play") ? "playing" : s,
             player:  dir ? readPlayerName(dir) : null,
             song:    luaData.song,
             chart:   luaData.chart,
-            score:   luaData.score || null,
+            score:   luaScore,
             source:  "lua",
           };
+
+          // 결과 상태 자동 감지: Lua가 "playing"이지만 scorelog가 최근 업데이트됨
+          // 곡 제목이 일치할 때만 result로 전환 (다른 곡으로 이동한 경우 무시)
+          if (out.state === "playing" && scoreData && lastUpdate > 0
+              && (now - lastUpdate) < 10000) {
+            const luaTitle   = (luaData.song?.title || "").trim();
+            const scoreTitle = (scoreData.song?.title || "").trim();
+            if (luaTitle && scoreTitle && luaTitle === scoreTitle) {
+              const mergedChart = scoreData.chart
+                ? { ...scoreData.chart,
+                    table: scoreData.chart.table || luaData?.chart?.table || "",
+                    diff:  scoreData.chart.diff  || luaData?.chart?.diff  || "" }
+                : luaData.chart;
+              out = {
+                state:   "result",
+                player:  dir ? readPlayerName(dir) : null,
+                song:    scoreData.song ?? luaData.song,
+                chart:   mergedChart,
+                score:   scoreData.score,
+                source:  "lua+score",
+              };
+            }
+          }
         }
       } else if (isQwilight()) {
         // ── Qwilight ──
@@ -933,6 +1035,15 @@ const server = http.createServer(async (req, res) => {
         };
       }
     }
+
+    // 진단 정보 추가 (플러그인이 상태를 파악할 수 있도록)
+    out._diag = {
+      dir:       dir || null,
+      game:      config.game,
+      method:    config.method,
+      watching:  isQwilight() ? !!qwPollingTimer : !!scorelogTimer,
+      scorelog:  scorelogPath || null,
+    };
 
     res.writeHead(200);
     res.end(JSON.stringify(out));
@@ -1091,7 +1202,7 @@ server.listen(PORT, "127.0.0.1", () => {
       initDir = detected;
     }
   }
-  applyConfig({ dir: initDir, game: initGame });
+  applyConfig({ dir: initDir, game: initGame }, true);
 
   if (!dir) {
     console.warn(" 경로  : 게임을 찾지 못했습니다.");

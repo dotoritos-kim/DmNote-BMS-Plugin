@@ -132,6 +132,10 @@ local function DMNOTE_write_state()
   local diff_label = DMNOTE_detect_diff()
 
   -- ── 실시간 스코어/판정/페이스메이커 ──
+  -- beatoraja main_state number IDs:
+  --   71 = EX SCORE, 73 = target EX, 74 = total notes,
+  --   75 = max combo, 76 = current combo,
+  --   110-114 = PGREAT/GREAT/GOOD/BAD/POOR
   local exscore  = DMNOTE_num(71,  0, 999999)
   local combo    = DMNOTE_num(76,  0, 999999)
   local maxcombo = DMNOTE_num(75,  0, 999999)
@@ -141,6 +145,11 @@ local function DMNOTE_write_state()
   local bad      = DMNOTE_num(113, 0, 999999)
   local poor     = DMNOTE_num(114, 0, 999999)
   local target   = DMNOTE_num(73,  0, 999999)
+  local miss     = bad + poor
+
+  -- rate 계산: exScore / maxExScore * 100
+  local maxex = notes * 2
+  local rate  = maxex > 0 and math.floor(exscore / maxex * 10000 + 0.5) / 100 or 0
 
   -- targetDiff는 음수 가능 (현재 - 타겟)
   local tdiff_ok, tdiff = pcall(function() return main_state.number(78) end)
@@ -165,7 +174,7 @@ local function DMNOTE_write_state()
     '{"state":"playing",'
     .. '"song":{"title":%s,"artist":%s,"genre":%s,"level":%d,"bpm":%g,"notes":%d},'
     .. '"chart":{"keys":%s,"level":%d,"label":%s,"table":%s,"diff":%s},'
-    .. '"score":{"exScore":%d,"combo":%d,"maxCombo":%d,"pgreat":%d,"great":%d,"good":%d,"bad":%d,"poor":%d,"target":%d,"targetDiff":%d},'
+    .. '"score":{"exScore":%d,"rate":%g,"combo":%d,"maxCombo":%d,"miss":%d,"pgreat":%d,"great":%d,"good":%d,"bad":%d,"poor":%d,"target":%d,"targetDiff":%d},'
     .. '"timestamp":%d}',
     DMNOTE_jstr(title),
     DMNOTE_jstr(artist),
@@ -176,7 +185,7 @@ local function DMNOTE_write_state()
     DMNOTE_jstr(chart_label),
     DMNOTE_jstr(table_label),
     DMNOTE_jstr(diff_label),
-    exscore, combo, maxcombo,
+    exscore, rate, combo, maxcombo, miss,
     pgreat, great, good, bad, poor,
     target, tdiff,
     os.time() * 1000
