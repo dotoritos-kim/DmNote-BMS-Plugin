@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*.log
+npm-debug.log*
+dmnote_state.json
+dist/

@@ -1,0 +1,17 @@
+{
+  "name": "dmnote-bridge",
+  "version": "1.0.0",
+  "description": "beatoraja/lr2oraja/Qwilight 게임 상태를 DmNote 플러그인에 전달하는 로컬 브릿지 서버",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.x",
+    "chokidar": "^3.x"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

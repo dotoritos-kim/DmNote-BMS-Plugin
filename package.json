@@ -1,0 +1,11 @@
+{
+  "name": "dmnote-bms-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DmNote plugins for beatoraja/lr2oraja/Qwilight BMS games",
+  "scripts": {
+    "install:bridge": "cd plugin/beatoraja-bridge && npm install",
+    "release": "node scripts/release.js"
+  },
+  "license": "MIT"
+}
