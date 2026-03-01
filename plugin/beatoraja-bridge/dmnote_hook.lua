@@ -214,9 +214,12 @@ function DMNOTE_inject(skin)
     id = -1, loop = -1,
     draw = function()
       -- 시간 기반 throttle (pcall 밖에서 처리 → 최소 오버헤드)
-      local now = os.clock()
-      if now - DMNOTE__last_time < DMNOTE_INTERVAL then return false end
-      DMNOTE__last_time = now
+      -- DMNOTE_INTERVAL <= 0 이면 매 프레임 호출 (쓰로틀 없음)
+      if DMNOTE_INTERVAL > 0 then
+        local now = os.clock()
+        if now - DMNOTE__last_time < DMNOTE_INTERVAL then return false end
+        DMNOTE__last_time = now
+      end
       pcall(DMNOTE_write_state)
       return false -- 보이지 않음
     end,

@@ -128,9 +128,10 @@ const _globalSettings = dmn.plugin.defineSettings({
       type: "number",
       default: 2,
       label: "settings.hookUpdateRate",
+      description: "settings.hookUpdateRate.desc",
       when: { key: "game", not: "qwilight" },
-      min: 1,
-      max: 10,
+      min: 0,
+      max: 60,
     },
   },
   messages: {
@@ -152,7 +153,8 @@ const _globalSettings = dmn.plugin.defineSettings({
       "settings.luaStatePath.placeholder":"auto",
       "settings.customApiUrl":            "API URL",
       "settings.customApiUrl.placeholder":"http://...",
-      "settings.hookUpdateRate":          "Hook Rate",
+      "settings.hookUpdateRate":          "Hook Rate (Hz)",
+      "settings.hookUpdateRate.desc":     "0 = every frame (no throttle)",
     },
     ko: {
       "settings.bridgeUrl":               "호스트",
@@ -172,7 +174,8 @@ const _globalSettings = dmn.plugin.defineSettings({
       "settings.luaStatePath.placeholder":"자동",
       "settings.customApiUrl":            "API URL",
       "settings.customApiUrl.placeholder":"http://...",
-      "settings.hookUpdateRate":          "훅 빈도",
+      "settings.hookUpdateRate":          "훅 빈도 (Hz)",
+      "settings.hookUpdateRate.desc":     "0 = 매 프레임 (쓰로틀 없음)",
     },
   },
 });
@@ -263,7 +266,7 @@ async function _tryAutoSetup() {
     const setupRes = await fetch(`${base}/setup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hookUpdateRate: gs.hookUpdateRate || 2 }),
+      body: JSON.stringify({ hookUpdateRate: gs.hookUpdateRate ?? 2 }),
       signal: AbortSignal.timeout(10000),
     });
     const result = await setupRes.json();
@@ -346,7 +349,7 @@ dmn.plugin.defineElement({
             await fetch(`${base}/setup`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ hookUpdateRate: gs.hookUpdateRate || 2 }),
+              body: JSON.stringify({ hookUpdateRate: gs.hookUpdateRate ?? 2 }),
               signal: AbortSignal.timeout(10000),
             });
           } catch {}
@@ -812,7 +815,7 @@ dmn.plugin.defineElement({
           ${settings.showKeys !== false
             ? html`<span style="font-size:${sz.info}px;padding:2px 7px;background:${_rgba(cKeys, 0.1)};color:${cKeys};border-radius:4px;font-weight:600;white-space:nowrap;">${keys}</span>`
             : ""}
-          ${level !== "--" && level > 0
+          ${level !== "--" && level > 0 && !(settings.showTable !== false && table)
             ? html`<span style="font-size:${sz.info + 2}px;font-weight:700;color:${cLevel};white-space:nowrap;">\u2606${level}</span>`
             : ""}
           ${settings.showDifficulty !== false && diff

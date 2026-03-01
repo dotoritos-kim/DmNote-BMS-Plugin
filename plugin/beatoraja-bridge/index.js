@@ -205,7 +205,13 @@ function setupLuaHook(gameDir, hookInterval) {
   }
   try {
     let hookContent = fs.readFileSync(hookSrc, "utf8");
-    if (hookInterval && hookInterval > 0) {
+    if (hookInterval === 0) {
+      // 0 = 매 프레임 (쓰로틀 없음)
+      hookContent = hookContent.replace(
+        /DMNOTE_INTERVAL\s*=\s*[\d.]+/,
+        `DMNOTE_INTERVAL = 0`
+      );
+    } else if (hookInterval && hookInterval > 0) {
       const interval = 1 / hookInterval;  // Hz → 초
       hookContent = hookContent.replace(
         /DMNOTE_INTERVAL\s*=\s*[\d.]+/,
@@ -213,7 +219,8 @@ function setupLuaHook(gameDir, hookInterval) {
       );
     }
     fs.writeFileSync(hookDst, hookContent, "utf8");
-    console.log(`[setup] ${HOOK_FILE} → ${hookDst} (interval: ${hookInterval ? (1/hookInterval).toFixed(2) : 0.5}s)`);
+    const label = hookInterval === 0 ? "every frame" : `${hookInterval > 0 ? (1/hookInterval).toFixed(2) : 0.5}s`;
+    console.log(`[setup] ${HOOK_FILE} → ${hookDst} (interval: ${label})`);
   } catch (e) {
     results.errors.push(`Failed to copy ${HOOK_FILE}: ${e.message}`);
     return results;
@@ -1144,7 +1151,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       // 2. Lua 훅 설치 + 스킨 패치 (hookUpdateRate: 초당 업데이트 횟수)
-      const hookUpdateRate = parsed.hookUpdateRate || 2;
+      const hookUpdateRate = parsed.hookUpdateRate ?? 2;
       const results = setupLuaHook(setupDir, hookUpdateRate);
       if (results.errors.length > 0 && results.patched.length === 0) {
         res.writeHead(500);
