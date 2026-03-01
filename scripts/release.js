@@ -17,7 +17,8 @@ const BRIDGE_DIR = path.join(PLUGIN_DIR, "beatoraja-bridge");
 const DIST_DIR = path.join(ROOT, "dist");
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-const version = pkg.version;
+// CI에서 RELEASE_VERSION 환경변수로 버전 전달, 없으면 package.json fallback
+const version = process.env.RELEASE_VERSION || pkg.version;
 
 // ── 1. node_modules 확인 ────────────────────────────────────────────────────
 
