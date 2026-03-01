@@ -6,46 +6,7 @@
  * beatoraja, lr2oraja, Qwilight 등에서 선곡·플레이 중인 곡 정보를 DmNote 패널에 표시합니다.
  */
 
-// ── 브릿지 프로세스 관리 ─────────────────────────────────────────────────────
-
-const _node = (() => {
-  try {
-    return {
-      path: require("path"),
-      cp: require("child_process"),
-      fs: require("fs"),
-    };
-  } catch {
-    return null;
-  }
-})();
-
-let _bridgeProcess = null;
-let _bridgeShuttingDown = false;
-let _bridgeRestartCount = 0;
-const _BRIDGE_MAX_RESTARTS = 3;
-
-function _getBridgePath() {
-  if (!_node) return null;
-  try {
-    if (typeof __dirname === "string") {
-      return _node.path.join(__dirname, "beatoraja-bridge");
-    }
-    if (typeof __filename === "string") {
-      return _node.path.join(_node.path.dirname(__filename), "beatoraja-bridge");
-    }
-  } catch {}
-  return null;
-}
-
-function _isBridgeIndexPresent(bridgePath) {
-  if (!_node || !bridgePath) return false;
-  try {
-    return _node.fs.existsSync(_node.path.join(bridgePath, "index.js"));
-  } catch {
-    return false;
-  }
-}
+// ── 브릿지 연결 확인 및 자동 실행 ────────────────────────────────────────────
 
 async function _isBridgeAlreadyRunning() {
   const base = _getBase();
@@ -59,71 +20,39 @@ async function _isBridgeAlreadyRunning() {
   }
 }
 
-function _spawnBridge() {
-  const bridgePath = _getBridgePath();
-  if (!bridgePath || !_isBridgeIndexPresent(bridgePath) || !_node) return false;
-
-  const gs = _globalSettings.get();
-  const port = String(gs.bridgePort || 54321);
-
+async function _getMyPluginPath() {
   try {
-    _bridgeProcess = _node.cp.fork(
-      _node.path.join(bridgePath, "index.js"),
-      ["--port", port],
-      {
-        cwd: bridgePath,
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-        windowsHide: true,
-      }
-    );
+    const jsData = await window.api.js.get();
+    const me = jsData.plugins.find(p => p.name === "beatoraja.js");
+    return me?.path || null;
+  } catch {
+    return null;
+  }
+}
 
-    _bridgeProcess.stderr.on("data", (data) => {
-      console.error("[bridge stderr]", data.toString());
-    });
+function _deriveBatPath(pluginPath) {
+  const dir = pluginPath.replace(/[/\\][^/\\]+$/, "");
+  return dir + "\\beatoraja-bridge\\start.bat";
+}
 
-    _bridgeProcess.on("exit", () => {
-      _bridgeProcess = null;
-      if (!_bridgeShuttingDown && _bridgeRestartCount < _BRIDGE_MAX_RESTARTS) {
-        _bridgeRestartCount++;
-        setTimeout(_spawnBridge, 2000);
-      }
-    });
-
+async function _launchBridge() {
+  const pluginPath = await _getMyPluginPath();
+  if (!pluginPath) return false;
+  try {
+    await window.api.app.openExternal(_deriveBatPath(pluginPath));
     return true;
-  } catch (e) {
-    console.error("[bridge] fork failed:", e.message);
-    _bridgeProcess = null;
+  } catch {
     return false;
   }
 }
 
-function _killBridge() {
-  _bridgeShuttingDown = true;
-  if (_bridgeProcess) {
-    const proc = _bridgeProcess;
-    _bridgeProcess = null;
-    try {
-      proc.kill("SIGTERM");
-    } catch {}
-    setTimeout(() => {
-      try {
-        proc.kill("SIGKILL");
-      } catch {}
-    }, 3000);
-  }
-}
-
-async function _waitForBridge(maxRetries = 10, intervalMs = 500) {
-  const base = _getBase();
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await fetch(`${base}/state`, {
-        signal: AbortSignal.timeout(1000),
-      });
-      if (res.ok) return true;
-    } catch {}
-    await new Promise((r) => setTimeout(r, intervalMs));
+async function _ensureBridge() {
+  if (await _isBridgeAlreadyRunning()) return true;
+  const launched = await _launchBridge();
+  if (!launched) return false;
+  for (let i = 0; i < 16; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    if (await _isBridgeAlreadyRunning()) return true;
   }
   return false;
 }
@@ -291,6 +220,7 @@ let _connected = false;
 let _data = null;
 let _setState = null;
 let _setupAttempted = false;
+let _autoLaunchAttempted = false;
 
 function _getBase() {
   const gs = _globalSettings.get();
@@ -371,14 +301,13 @@ async function _poll() {
 
 async function _startPolling() {
   clearTimeout(_pollTimer);
-  const alreadyRunning = await _isBridgeAlreadyRunning();
-  if (!alreadyRunning) {
-    const spawned = _spawnBridge();
-    if (spawned) {
-      await _waitForBridge();
-    }
-  }
   _pushConfig();
+  if (!_autoLaunchAttempted) {
+    _autoLaunchAttempted = true;
+    _updateState({ _bridgeLaunching: true });
+    const ok = await _ensureBridge();
+    _updateState({ _bridgeLaunching: false, _launchFailed: !ok });
+  }
   _poll();
 }
 
@@ -420,6 +349,17 @@ dmn.plugin.defineElement({
               signal: AbortSignal.timeout(10000),
             });
           } catch {}
+        },
+      },
+      {
+        label: "menu.startServer",
+        position: "bottom",
+        onClick: async () => {
+          clearTimeout(_pollTimer);
+          _updateState({ _bridgeLaunching: true, _launchFailed: false });
+          const ok = await _ensureBridge();
+          _updateState({ _bridgeLaunching: false, _launchFailed: !ok });
+          _startPolling();
         },
       },
       {
@@ -546,6 +486,7 @@ dmn.plugin.defineElement({
       "menu.delete":          "Delete BMS Now Playing Panel",
       "menu.serverSettings":  "Server Settings",
       "menu.autoSetup":       "Auto Setup (Lua Patch)",
+      "menu.startServer":     "Start Server",
       "menu.reconnect":       "Reconnect",
       "menu.disconnect":      "Disconnect",
       "menu.uninstall":       "Remove Lua Patch",
@@ -598,8 +539,10 @@ dmn.plugin.defineElement({
       "settings.statusBarOpacity":  "Status Bar Opacity (%)",
       "settings.colorStatusDot":    "Status Dot Color",
 
-      "status.disconnected":      "Bridge server not running",
-      "status.disconnected.hint": "node index.js",
+      "status.disconnected":          "Bridge server not running",
+      "status.launching":             "Starting bridge server...",
+      "status.launchFailed":          "Failed to start server",
+      "status.launchFailed.hint":     "Run start.bat in beatoraja-bridge folder",
       "status.setupDone":         "Restart the game for real-time detection",
       "status.setupFail":         "Auto-setup failed — run the game first",
       "label.player":  "PLAYER",
@@ -614,6 +557,7 @@ dmn.plugin.defineElement({
       "menu.delete":          "BMS Now Playing 패널 삭제",
       "menu.serverSettings":  "서버 설정",
       "menu.autoSetup":       "자동 설정 (Lua 패치)",
+      "menu.startServer":     "서버 시작",
       "menu.reconnect":       "재연결",
       "menu.disconnect":      "연결 끊기",
       "menu.uninstall":       "Lua 패치 제거",
@@ -666,8 +610,10 @@ dmn.plugin.defineElement({
       "settings.statusBarOpacity":  "상태 바 불투명도 (%)",
       "settings.colorStatusDot":    "상태 점 색상",
 
-      "status.disconnected":      "브릿지 서버가 실행되지 않음",
-      "status.disconnected.hint": "node index.js",
+      "status.disconnected":          "브릿지 서버가 실행되지 않음",
+      "status.launching":             "브릿지 서버 시작 중...",
+      "status.launchFailed":          "서버 시작 실패",
+      "status.launchFailed.hint":     "beatoraja-bridge 폴더의 start.bat을 실행하세요",
       "status.setupDone":         "게임을 재시작하면 실시간 감지가 시작됩니다",
       "status.setupFail":         "자동 설정 실패 — 게임을 먼저 실행하세요",
       "label.player":  "플레이어",
@@ -748,19 +694,20 @@ dmn.plugin.defineElement({
 
     // ── 연결 안됨 ──
     if (!connected) {
+      const launching = state._bridgeLaunching;
+      const failed = state._launchFailed;
+      const statusText = launching ? t("status.launching") : failed ? t("status.launchFailed") : t("status.disconnected");
       return html`
         ${fontLink}
         <div style=${container}>
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:6px;opacity:0.45;">
             <div style="font-size:22px;">🎮</div>
-            <div style="font-size:${sz.player}px;font-weight:600;color:${cPlayerLabel};">${t("status.disconnected")}</div>
+            <div style="font-size:${sz.player}px;font-weight:600;color:${cPlayerLabel};">${statusText}</div>
             <div
-              data-plugin-handler="${state._h_reconnect || ""}"
-              style="font-size:${sz.dim}px;margin-top:2px;padding:3px 12px;border-radius:4px;background:${_rgba(cPlayerName, 0.15)};color:${cPlayerName};cursor:pointer;font-weight:600;border:1px solid ${_rgba(cPlayerName, 0.3)};"
-            >${t("menu.reconnect")}</div>
-            <div style="font-size:${sz.dim}px;opacity:0.5;margin-top:2px;color:${cPlayerLabel};">
-              ${t("status.disconnected.hint")}
-            </div>
+              data-plugin-handler="${state._h_startServer || ""}"
+              style="font-size:${sz.dim}px;margin-top:2px;padding:3px 12px;border-radius:4px;background:${_rgba(cPlayerName, 0.15)};color:${cPlayerName};cursor:pointer;font-weight:600;border:1px solid ${_rgba(cPlayerName, 0.3)};${launching ? "opacity:0.5;pointer-events:none;" : ""}"
+            >${t("menu.startServer")}</div>
+            ${failed ? html`<div style="font-size:${sz.dim}px;opacity:0.5;margin-top:2px;color:${cPlayerLabel};">${t("status.launchFailed.hint")}</div>` : ""}
           </div>
         </div>
       `;
@@ -969,8 +916,6 @@ dmn.plugin.defineElement({
 
   onMount: ({ setState, onSettingsChange }) => {
     _setState = setState;
-    _bridgeShuttingDown = false;
-    _bridgeRestartCount = 0;
     setState({ connected: _connected, data: _data });
     _startPolling();
 
@@ -981,20 +926,22 @@ dmn.plugin.defineElement({
 
     onSettingsChange(() => {});
 
-    const reconnectId = "__beatoraja_reconnect";
-    window[reconnectId] = () => {
+    const startServerId = "__beatoraja_start_server";
+    window[startServerId] = async () => {
       clearTimeout(_pollTimer);
-      _bridgeRestartCount = 0;
+      _updateState({ _bridgeLaunching: true, _launchFailed: false });
+      const ok = await _ensureBridge();
+      _updateState({ _bridgeLaunching: false, _launchFailed: !ok });
       _startPolling();
     };
-    setState({ _h_reconnect: reconnectId });
+    setState({ _h_startServer: startServerId });
 
     return () => {
       _stopPolling();
       _setState = null;
+      _autoLaunchAttempted = false;
       unsubGlobal();
-      delete window[reconnectId];
-      _killBridge();
+      delete window[startServerId];
     };
   },
 });

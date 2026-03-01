@@ -27,13 +27,24 @@ if (!fs.existsSync(nodeModules)) {
   execSync("npm install", { cwd: BRIDGE_DIR, stdio: "inherit" });
 }
 
-// ── 2. dist 폴더 생성 ──────────────────────────────────────────────────────
+// ── 2. node.exe 번들링 ──────────────────────────────────────────────────────
+
+const bundledNode = path.join(BRIDGE_DIR, "node.exe");
+const nodeExeSrc = process.execPath;
+
+console.log(`[release] node.exe 복사: ${nodeExeSrc}`);
+fs.copyFileSync(nodeExeSrc, bundledNode);
+
+const nodeSize = (fs.statSync(bundledNode).size / 1024 / 1024).toFixed(1);
+console.log(`[release] node.exe (${nodeSize} MB) 번들링 완료`);
+
+// ── 3. dist 폴더 생성 ─────────────────────────────────────────────────────
 
 if (!fs.existsSync(DIST_DIR)) {
   fs.mkdirSync(DIST_DIR, { recursive: true });
 }
 
-// ── 3. zip 생성 (PowerShell) ────────────────────────────────────────────────
+// ── 4. zip 생성 (PowerShell) ────────────────────────────────────────────────
 
 const zipName = `dmnote-bms-plugin-v${version}.zip`;
 const zipPath = path.join(DIST_DIR, zipName);
@@ -56,9 +67,15 @@ execSync(`powershell -NoProfile -Command "${psCmd}"`, {
   stdio: "inherit",
 });
 
+// ── 5. 번들된 node.exe 정리 ─────────────────────────────────────────────────
+
+if (fs.existsSync(bundledNode)) {
+  fs.unlinkSync(bundledNode);
+  console.log("[release] 번들된 node.exe 정리 완료");
+}
+
 const stat = fs.statSync(zipPath);
 const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
 
 console.log(`\n[release] 완료: dist/${zipName} (${sizeMB} MB)`);
-console.log(`[release] 배포: zip 파일을 공유하면 됩니다.`);
 console.log(`[release] 사용자: zip 압축 해제 후 DmNote에서 beatoraja.js 로드`);

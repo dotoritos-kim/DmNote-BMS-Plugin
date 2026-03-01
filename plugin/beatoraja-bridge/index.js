@@ -1131,10 +1131,3 @@ process.on("SIGINT", () => {
   server.close(() => process.exit(0));
 });
 
-process.on("disconnect", () => {
-  console.log("[bridge] 부모 프로세스 연결 해제, 종료합니다...");
-  stopLuaWatcher();
-  stopScorelogPolling();
-  stopQwilightPolling();
-  server.close(() => process.exit(0));
-});
