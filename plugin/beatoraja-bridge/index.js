@@ -570,6 +570,33 @@ let dirRetryTimer   = null;
 
 // ─── Lua 상태 파일 감시 ───────────────────────────────────────────────────────
 
+// 구 버전 훅 자동 교체 플래그 (세션당 1회)
+let _legacyHookReplaced = false;
+
+function _detectAndReplaceLegacyHook(d) {
+  if (_legacyHookReplaced || !dir) return;
+  // 구 훅 감지: score 존재하지만 pgreat 필드 없음, 또는 exScore > notes*2
+  const score = d?.score;
+  const notes = d?.song?.notes || 0;
+  if (!score) return;
+  const maxEx = notes * 2;
+  const isLegacy = (score.pgreat == null && score.exScore != null)
+    || (maxEx > 0 && score.exScore > maxEx);
+  if (!isLegacy) return;
+
+  _legacyHookReplaced = true;
+  const hookSrc = path.join(__dirname, HOOK_FILE);
+  const hookDst = path.join(dir, HOOK_FILE);
+  if (!fs.existsSync(hookSrc)) return;
+  try {
+    fs.copyFileSync(hookSrc, hookDst);
+    console.log(`[lua]   구 버전 훅 감지 → 자동 교체: ${hookDst}`);
+    console.log(`[lua]   게임 재시작 시 신 훅이 로드됩니다.`);
+  } catch (e) {
+    console.error(`[lua]   훅 자동 교체 실패: ${e.message}`);
+  }
+}
+
 function startLuaWatcher(filePath) {
   stopLuaWatcher();
   if (!filePath) return;
@@ -587,6 +614,7 @@ function startLuaWatcher(filePath) {
       luaData      = d;
       luaWrittenAt = Date.now();
       lastUpdate   = Date.now();
+      _detectAndReplaceLegacyHook(d);
     } catch { /* 쓰기 도중 읽음 */ }
   };
 
