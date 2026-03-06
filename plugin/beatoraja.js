@@ -933,9 +933,11 @@ dmn.plugin.defineElement({
     setState({ connected: _connected, data: _data });
     _startPolling();
 
+    let _configDebounce;
     const unsubGlobal = _globalSettings.subscribe(() => {
       clearTimeout(_pollTimer);
-      _startPolling();
+      clearTimeout(_configDebounce);
+      _configDebounce = setTimeout(() => _startPolling(), 300);
     });
 
     onSettingsChange(() => {});

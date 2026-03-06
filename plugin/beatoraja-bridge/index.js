@@ -31,6 +31,48 @@ const PORT       = parseInt(getArg("--port") || process.env.PORT || "54321", 10)
 const FORCE_DIR  = getArg("--dir") || process.env.BEATORAJA_DIR || process.env.LR2ORAJA_DIR || null;
 const FORCE_GAME = getArg("--game") || null; // "beatoraja" | "qwilight"
 
+// ─── Steam 라이브러리 자동 탐지 ──────────────────────────────────────────────
+
+function discoverSteamLibraries() {
+  const steamRoots = [
+    "C:/Program Files (x86)/Steam",
+    "C:/Program Files/Steam",
+    "D:/Program Files (x86)/Steam",
+    "D:/Program Files/Steam",
+    "D:/Steam",
+    "E:/Steam",
+  ];
+  const libs = new Set();
+  for (const root of steamRoots) {
+    const vdfPath = path.join(root, "steamapps", "libraryfolders.vdf");
+    if (!fs.existsSync(vdfPath)) continue;
+    try {
+      const content = fs.readFileSync(vdfPath, "utf8");
+      // VDF 형식: "path"		"C:\\SteamLibrary"  또는 "path"  "D:/SteamLibrary"
+      const re = /"path"\s+"([^"]+)"/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        libs.add(m[1].replace(/\\\\/g, "/"));
+      }
+      // Steam 루트 자체도 라이브러리
+      libs.add(root);
+    } catch {}
+  }
+  return [...libs];
+}
+
+const _steamLibs = discoverSteamLibraries();
+
+function steamCandidates(...gameFolders) {
+  const out = [];
+  for (const lib of _steamLibs) {
+    for (const folder of gameFolders) {
+      out.push(path.join(lib, "steamapps", "common", folder));
+    }
+  }
+  return out;
+}
+
 // ─── 게임 경로 자동 탐지 ──────────────────────────────────────────────────────
 
 const HOME = process.env.USERPROFILE || process.env.HOME || "";
@@ -58,6 +100,8 @@ const DEFAULT_CANDIDATES = [
   HOME && path.join(HOME, "Desktop", "lr2oraja"),
   HOME && path.join(HOME, "Downloads", "lr2oraja"),
   HOME && path.join(HOME, "Documents", "lr2oraja"),
+  // Steam 라이브러리 자동 탐지
+  ...steamCandidates("beatoraja", "lr2oraja"),
   // 현재 디렉토리 기준
   path.join(process.cwd(), ".."),
   process.cwd(),
@@ -72,35 +116,46 @@ function findDir(candidates = DEFAULT_CANDIDATES) {
 
 // ─── 게임 프로세스에서 경로 자동 감지 (beatoraja / lr2oraja) ─────────────────
 
+function _execProcess(cmd, timeout = 6000) {
+  try {
+    return execSync(cmd, { encoding: "utf8", timeout, windowsHide: true }).trim();
+  } catch { return ""; }
+}
+
 function detectGameProcess() {
   const patterns = ["beatoraja", "lr2oraja"];
 
   for (const pattern of patterns) {
-    // 1차: wmic (구형 Windows 호환)
-    try {
-      const raw = execSync(
-        `wmic process where "commandline like '%${pattern}%'" get executablepath /format:list`,
-        { encoding: "utf8", timeout: 5000, windowsHide: true }
-      );
-      const match = raw.match(/ExecutablePath=(.+)/);
-      if (match) {
-        const result = _resolveGameDir(match[1].trim());
-        if (result) return result;
-      }
-    } catch {}
+    // 1차: Get-CimInstance (Windows 10+, wmic 대체)
+    const cim = _execProcess(
+      `powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*${pattern}*' } | Select-Object -First 1 -ExpandProperty ExecutablePath"`,
+      8000
+    );
+    if (cim) {
+      const result = _resolveGameDir(cim);
+      if (result) return result;
+    }
 
-    // 2차: PowerShell (wmic deprecated in newer Windows)
-    try {
-      const raw = execSync(
-        `powershell -NoProfile -Command "Get-Process -ErrorAction SilentlyContinue | Where-Object {$_.Path -and $_.CommandLine -like '*${pattern}*'} | Select-Object -First 1 -ExpandProperty Path"`,
-        { encoding: "utf8", timeout: 8000, windowsHide: true }
-      );
-      const exePath = raw.trim();
-      if (exePath) {
-        const result = _resolveGameDir(exePath);
-        if (result) return result;
-      }
-    } catch {}
+    // 2차: Get-Process (CommandLine 없이 프로세스명으로 탐색)
+    const gp = _execProcess(
+      `powershell -NoProfile -Command "Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*${pattern}*' } | Select-Object -First 1 -ExpandProperty Path"`,
+      8000
+    );
+    if (gp) {
+      const result = _resolveGameDir(gp);
+      if (result) return result;
+    }
+
+    // 3차: wmic (구형 Windows 호환 — Windows 11에서 제거됨)
+    const wmic = _execProcess(
+      `wmic process where "commandline like '%${pattern}%'" get executablepath /format:list`,
+      5000
+    );
+    const wmicMatch = wmic.match(/ExecutablePath=(.+)/);
+    if (wmicMatch) {
+      const result = _resolveGameDir(wmicMatch[1].trim());
+      if (result) return result;
+    }
   }
   return null;
 }
@@ -170,27 +225,48 @@ function getActiveSkinPaths(gameDir) {
   return paths;
 }
 
-function patchLuaskin(content) {
-  // 이미 패치되어 있으면 스킵
-  if (content.includes(PATCH_MARKER)) return null;
-
-  // "if skin_config then" 이후 첫 번째 "return EXPR" 찾기
-  const pattern = /(if\s+skin_config\s+then\s*\n)([\t ]*)(return\s+)(.+)/;
-  const match = content.match(pattern);
-  if (!match) return null;
-
-  const [, ifLine, indent, , expr] = match;
-  const injected = `${ifLine}` +
-    `${indent}${PATCH_MARKER}\n` +
+function _buildInjection(indent, expr, hookAbsPath) {
+  const luaPath = hookAbsPath.replace(/\\/g, "/");
+  return `${indent}${PATCH_MARKER}\n` +
     `${indent}local _dmnote_skin = ${expr}\n` +
     `${indent}pcall(function()\n` +
-    `${indent}  local _f = loadfile("dmnote_hook.lua")\n` +
+    `${indent}  local _f = loadfile("${luaPath}")\n` +
     `${indent}  if _f then _f() end\n` +
     `${indent}  if DMNOTE_inject then DMNOTE_inject(_dmnote_skin) end\n` +
     `${indent}end)\n` +
     `${indent}return _dmnote_skin`;
+}
 
-  return content.replace(pattern, injected);
+function patchLuaskin(content, hookAbsPath) {
+  // 이미 패치되어 있으면 스킵
+  if (content.includes(PATCH_MARKER)) return null;
+
+  // 전략 1: "if skin_config then\n  return EXPR" (개행 후 return)
+  const pat1 = /(if\s+skin_config\s+then\s*\n)([\t ]*)(return\s+)(.+)/;
+  const m1 = content.match(pat1);
+  if (m1) {
+    const [, ifLine, indent, , expr] = m1;
+    return content.replace(pat1, ifLine + _buildInjection(indent, expr, hookAbsPath));
+  }
+
+  // 전략 2: "if skin_config then return EXPR" (한 줄)
+  const pat2 = /([\t ]*)(if\s+skin_config\s+then)\s+(return\s+)(.+)/;
+  const m2 = content.match(pat2);
+  if (m2) {
+    const [, indent, ifPart, , expr] = m2;
+    const replacement = `${indent}${ifPart}\n` + _buildInjection(indent + "  ", expr, hookAbsPath);
+    return content.replace(pat2, replacement);
+  }
+
+  // 전략 3: 최상위 "return skin" (skin_config 분기 없는 스킨)
+  const pat3 = /^([\t ]*)(return\s+)(skin\b.*)$/m;
+  const m3 = content.match(pat3);
+  if (m3) {
+    const [, indent, , expr] = m3;
+    return content.replace(pat3, _buildInjection(indent, expr, hookAbsPath));
+  }
+
+  return null;
 }
 
 function setupLuaHook(gameDir, hookInterval) {
@@ -218,6 +294,12 @@ function setupLuaHook(gameDir, hookInterval) {
         `DMNOTE_INTERVAL = ${interval}`
       );
     }
+    // 출력 파일 절대 경로로 치환 (CWD 무관하게 동작)
+    const absOutput = path.join(gameDir, "dmnote_state.json").replace(/\\/g, "/");
+    hookContent = hookContent.replace(
+      /DMNOTE_OUTPUT\s*=\s*"[^"]*"/,
+      `DMNOTE_OUTPUT    = "${absOutput}"`
+    );
     fs.writeFileSync(hookDst, hookContent, "utf8");
     const label = hookInterval === 0 ? "every frame" : `${hookInterval > 0 ? (1/hookInterval).toFixed(2) : 0.5}s`;
     console.log(`[setup] ${HOOK_FILE} → ${hookDst} (interval: ${label})`);
@@ -238,7 +320,7 @@ function setupLuaHook(gameDir, hookInterval) {
         continue;
       }
 
-      const patched = patchLuaskin(content);
+      const patched = patchLuaskin(content, hookDst);
       if (!patched) {
         results.skipped.push(skinPath);
         continue;
@@ -383,6 +465,7 @@ const QW_CANDIDATES = [
   "C:/Program Files/Steam/steamapps/common/Qwilight",
   "D:/SteamLibrary/steamapps/common/Qwilight",
   "E:/SteamLibrary/steamapps/common/Qwilight",
+  ...steamCandidates("Qwilight"),
 ];
 
 function findQwilightDir() {
@@ -392,17 +475,44 @@ function findQwilightDir() {
   return null;
 }
 
+function _resolveQwilightDir(exePath) {
+  const candidate = path.dirname(exePath);
+  if (fs.existsSync(path.join(candidate, "SavesDir", "DB.db"))) return candidate;
+  return null;
+}
+
 function detectQwilightProcess() {
-  try {
-    const raw = execSync(
-      'wmic process where "name like \'Qwilight%\'" get executablepath /format:list',
-      { encoding: "utf8", timeout: 5000, windowsHide: true }
-    );
-    const match = raw.match(/ExecutablePath=(.+)/);
-    if (!match) return null;
-    const candidate = path.dirname(match[1].trim());
-    if (fs.existsSync(path.join(candidate, "SavesDir", "DB.db"))) return candidate;
-  } catch {}
+  // 1차: Get-CimInstance
+  const cim = _execProcess(
+    'powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like \'Qwilight*\' } | Select-Object -First 1 -ExpandProperty ExecutablePath"',
+    8000
+  );
+  if (cim) {
+    const result = _resolveQwilightDir(cim);
+    if (result) return result;
+  }
+
+  // 2차: Get-Process
+  const gp = _execProcess(
+    'powershell -NoProfile -Command "Get-Process -Name Qwilight* -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path"',
+    8000
+  );
+  if (gp) {
+    const result = _resolveQwilightDir(gp);
+    if (result) return result;
+  }
+
+  // 3차: wmic (구형 Windows 호환)
+  const wmic = _execProcess(
+    'wmic process where "name like \'Qwilight%\'" get executablepath /format:list',
+    5000
+  );
+  const wmicMatch = wmic.match(/ExecutablePath=(.+)/);
+  if (wmicMatch) {
+    const result = _resolveQwilightDir(wmicMatch[1].trim());
+    if (result) return result;
+  }
+
   return null;
 }
 
@@ -596,7 +706,13 @@ function _detectAndReplaceLegacyHook(d) {
   const hookDst = path.join(dir, HOOK_FILE);
   if (!fs.existsSync(hookSrc)) return;
   try {
-    fs.copyFileSync(hookSrc, hookDst);
+    let hookContent = fs.readFileSync(hookSrc, "utf8");
+    const absOutput = path.join(dir, "dmnote_state.json").replace(/\\/g, "/");
+    hookContent = hookContent.replace(
+      /DMNOTE_OUTPUT\s*=\s*"[^"]*"/,
+      `DMNOTE_OUTPUT    = "${absOutput}"`
+    );
+    fs.writeFileSync(hookDst, hookContent, "utf8");
     console.log(`[lua]   구 버전 훅 감지 → 자동 교체: ${hookDst}`);
     console.log(`[lua]   게임 재시작 시 신 훅이 로드됩니다.`);
   } catch (e) {
@@ -846,6 +962,7 @@ function applyConfig(newConfig, force = false) {
     return;
   }
   _lastConfigHash = hash;
+  console.log("[config] 재구성 요청:", JSON.stringify(newConfig));
 
   // config 병합
   config = merged;
@@ -1113,7 +1230,6 @@ const server = http.createServer(async (req, res) => {
     req.on("end", () => {
       try {
         const parsed = JSON.parse(body);
-        console.log("[config] 재구성 요청:", JSON.stringify(parsed));
         applyConfig(parsed);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true }));
