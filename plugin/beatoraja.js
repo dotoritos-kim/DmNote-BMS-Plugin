@@ -424,6 +424,9 @@ dmn.plugin.defineElement({
 
     // ── 레이아웃 ──
     _s_layout: { type: "divider" },
+    fixedWidth:  { type: "number", default: 0, min: 0, max: 3000, label: "settings.fixedWidth" },
+    fixedHeight: { type: "number", default: 0, min: 0, max: 3000, label: "settings.fixedHeight" },
+    showToggleBar: { type: "boolean", default: false, label: "settings.showToggleBar" },
     textAlign: {
       type: "select",
       default: "left",
@@ -512,6 +515,9 @@ dmn.plugin.defineElement({
       "settings.showMiss":        "Show Miss Count",
       "settings.showStatusBar":   "Show Connection Status",
 
+      "settings.fixedWidth":        "Fixed Width (px, 0=auto)",
+      "settings.fixedHeight":       "Fixed Height (px, 0=auto)",
+      "settings.showToggleBar":     "Show Toggle Bar",
       "settings.textAlign":         "Text Align",
       "settings.textAlign.left":    "Left",
       "settings.textAlign.center":  "Center",
@@ -585,6 +591,9 @@ dmn.plugin.defineElement({
       "settings.showMiss":        "미스 카운트 표시",
       "settings.showStatusBar":   "연결 상태 표시",
 
+      "settings.fixedWidth":        "고정 너비 (px, 0=자동)",
+      "settings.fixedHeight":       "고정 높이 (px, 0=자동)",
+      "settings.showToggleBar":     "토글 바 표시",
       "settings.textAlign":         "텍스트 정렬",
       "settings.textAlign.left":    "왼쪽",
       "settings.textAlign.center":  "가운데",
@@ -655,6 +664,10 @@ dmn.plugin.defineElement({
     const sz = SIZE_MAP[settings.fontSize] || SIZE_MAP.medium;
     const align = settings.textAlign || "left";
 
+    // 토글 바에 의한 설정 오버라이드
+    const _tf = state._togFlips || {};
+    const _eff = (key) => { const base = settings[key]; return _tf[key] ? !base : base; };
+
     // 색상
     const cPlayerLabel = settings.colorPlayerLabel || "#E2E8F0";
     const cPlayerName  = settings.colorPlayerName  || "#60A5FA";
@@ -682,12 +695,14 @@ dmn.plugin.defineElement({
     const bgG = parseInt(bgHex.slice(3, 5), 16) || 0;
     const bgB = parseInt(bgHex.slice(5, 7), 16) || 0;
 
+    const fw = settings.fixedWidth  > 0 ? `${settings.fixedWidth}px`  : "100%";
+    const fh = settings.fixedHeight > 0 ? `${settings.fixedHeight}px` : "100%";
     const container = `
       background: rgba(${bgR},${bgG},${bgB},${bgOpacity});
       border: 1px solid rgba(255,255,255,0.07);
       border-radius: 10px;
       padding: 12px 14px;
-      width: 100%; height: 100%;
+      width: ${fw}; height: ${fh};
       box-sizing: border-box;
       display: flex; flex-direction: column; gap: 6px;
       font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -796,7 +811,7 @@ dmn.plugin.defineElement({
         <div style="width:100%;height:1px;background:rgba(255,255,255,0.06);"></div>
 
         <!-- 장르 -->
-        ${settings.showGenre === true && genre
+        ${_eff("showGenre") && genre
           ? html`<div style="font-size:${sz.dim}px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;color:${cGenre};">${genre}</div>`
           : ""}
 
@@ -812,30 +827,30 @@ dmn.plugin.defineElement({
 
         <!-- 차트 정보 행 -->
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:${justify};opacity:${hasSong ? 1 : 0.25};min-width:0;">
-          ${settings.showKeys !== false
+          ${_eff("showKeys")
             ? html`<span style="font-size:${sz.info}px;padding:2px 7px;background:${_rgba(cKeys, 0.1)};color:${cKeys};border-radius:4px;font-weight:600;white-space:nowrap;">${keys}</span>`
             : ""}
-          ${level !== "--" && level > 0 && !(settings.showTable !== false && table)
+          ${level !== "--" && level > 0 && !(_eff("showTable") && table)
             ? html`<span style="font-size:${sz.info + 2}px;font-weight:700;color:${cLevel};white-space:nowrap;">\u2606${level}</span>`
             : ""}
-          ${settings.showDifficulty !== false && diff
+          ${_eff("showDifficulty") && diff
             ? html`<span style="font-size:${sz.info}px;opacity:0.6;color:${cDiff};white-space:nowrap;">${diff}</span>`
             : ""}
-          ${settings.showTable !== false && table
+          ${_eff("showTable") && table
             ? html`<span style="font-size:${sz.info}px;padding:2px 7px;background:${_rgba(cTable, 0.08)};color:${cTable};border-radius:4px;font-weight:600;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;">${table}</span>`
             : ""}
-          ${settings.showBpm !== false && bpm
+          ${_eff("showBpm") && bpm
             ? html`<span style="font-size:${sz.info}px;opacity:0.5;color:${cBpm};white-space:nowrap;${align === "left" ? "margin-left:auto;" : ""}">${bpm} BPM</span>`
             : ""}
         </div>
 
         <!-- 노트 수 -->
-        ${settings.showNotes === true && notes
+        ${_eff("showNotes") && notes
           ? html`<div style="font-size:${sz.dim}px;opacity:0.45;color:${cNotes};">${notes.toLocaleString()} NOTES</div>`
           : ""}
 
         <!-- 점수 -->
-        ${settings.showScore !== false && score
+        ${_eff("showScore") && score
           ? html`
             <div style="width:100%;height:1px;background:rgba(255,255,255,0.06);margin-top:2px;"></div>
             <div style="display:flex;gap:12px;align-items:flex-start;min-width:0;flex-wrap:wrap;justify-content:${justify};">
@@ -851,7 +866,7 @@ dmn.plugin.defineElement({
                 <div style="${dimStyle}color:${cScoreLabel};">COMBO</div>
                 <div style="font-size:${sz.info + 2}px;font-weight:700;color:${cCombo};white-space:nowrap;">${score.combo != null ? score.combo.toLocaleString() : score.maxCombo != null ? score.maxCombo.toLocaleString() : "--"}</div>
               </div>
-              ${settings.showMiss !== false && score.miss != null
+              ${_eff("showMiss") && score.miss != null
                 ? html`<div style="min-width:0;">
                     <div style="${dimStyle}color:${cScoreLabel};">MISS</div>
                     <div style="font-size:${sz.info + 2}px;font-weight:700;color:#EF4444;white-space:nowrap;">${score.miss.toLocaleString()}</div>
@@ -862,7 +877,7 @@ dmn.plugin.defineElement({
           : ""}
 
         <!-- 판정 카운트 -->
-        ${settings.showJudge === true && score && score.pgreat != null
+        ${_eff("showJudge") && score && score.pgreat != null
           ? html`
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:${justify};font-size:${sz.dim}px;font-weight:600;">
               <span style="color:#00BFFF;">PG <span style="font-weight:700;">${score.pgreat}</span></span>
@@ -872,7 +887,7 @@ dmn.plugin.defineElement({
               <span style="color:#EF4444;">PR <span style="font-weight:700;">${score.poor}</span></span>
             </div>
           `
-          : settings.showJudge === true && score && score.highest != null
+          : _eff("showJudge") && score && score.highest != null
             ? html`
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:${justify};font-size:${sz.dim}px;font-weight:600;">
                 <span style="color:#FFD700;">Highest <span style="font-weight:700;">${score.highest}</span></span>
@@ -886,7 +901,7 @@ dmn.plugin.defineElement({
             : ""}
 
         <!-- 페이스메이커 -->
-        ${settings.showPacemaker !== false && isPlaying && score && score.target > 0
+        ${_eff("showPacemaker") && isPlaying && score && score.target > 0
           ? html`
             <div style="display:flex;align-items:center;gap:6px;justify-content:${justify};font-size:${sz.info}px;">
               <span style="opacity:0.5;color:${cScoreLabel};font-size:${sz.dim}px;font-weight:600;">TARGET</span>
@@ -896,7 +911,7 @@ dmn.plugin.defineElement({
           : ""}
 
         <!-- 클리어 타입 -->
-        ${settings.showClear !== false && isResult && score && score.clear
+        ${_eff("showClear") && isResult && score && score.clear
           ? html`
             <div style="display:flex;justify-content:${justify};">
               <span style="font-size:${sz.badge}px;padding:2px 8px;border-radius:6px;font-weight:700;white-space:nowrap;
@@ -914,10 +929,44 @@ dmn.plugin.defineElement({
           ? html`<div style="font-size:${sz.dim}px;opacity:${noGameDir ? 0.6 : 0.35};text-align:center;padding:4px 0;color:${noGameDir ? "#F59E0B" : cPlayerLabel};">${statusMsg}</div>`
           : ""}
 
+        <!-- 토글 바 -->
+        ${settings.showToggleBar
+          ? (() => {
+              const th = state._togHandlers || {};
+              const items = [
+                ["showScore",      "SC"],
+                ["showJudge",      "JG"],
+                ["showPacemaker",  "PM"],
+                ["showClear",      "CL"],
+                ["showMiss",       "MS"],
+                ["showGenre",      "GN"],
+                ["showKeys",       "KY"],
+                ["showBpm",        "BP"],
+                ["showNotes",      "NT"],
+                ["showTable",      "TB"],
+                ["showDifficulty", "DF"],
+              ];
+              const btnStyle = (on) => `
+                padding:1px 5px;border-radius:3px;cursor:pointer;font-weight:600;
+                font-size:${sz.dim - 1}px;letter-spacing:0.3px;
+                background:${on ? _rgba(cPlayerName, 0.18) : "transparent"};
+                color:${on ? cPlayerName : _rgba(cStatusBar, 0.3)};
+                border:1px solid ${on ? _rgba(cPlayerName, 0.3) : "rgba(255,255,255,0.06)"};
+              `;
+              return html`
+                <div style="display:flex;gap:3px;flex-wrap:wrap;justify-content:${justify};margin-top:auto;">
+                  ${items.map(([key, label]) =>
+                    html`<span data-plugin-handler="${th[key] || ""}" style="${btnStyle(_eff(key))}">${label}</span>`
+                  )}
+                </div>
+              `;
+            })()
+          : ""}
+
         <!-- 하단 연결 상태 -->
-        ${settings.showStatusBar !== false
+        ${_eff("showStatusBar")
           ? html`
-            <div style="font-size:${sz.dim}px;opacity:${statusBarOp};color:${cStatusBar};margin-top:auto;display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;justify-content:${justify};">
+            <div style="font-size:${sz.dim}px;opacity:${statusBarOp};color:${cStatusBar};${settings.showToggleBar ? "" : "margin-top:auto;"}display:flex;align-items:center;gap:3px;min-width:0;overflow:hidden;justify-content:${justify};">
               <span style="width:5px;height:5px;border-radius:50%;background:${noGameDir ? "#F59E0B" : cStatusDot};display:inline-block;flex-shrink:0;"></span>
               <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${bridgeHost}${diag.method ? ` · ${diag.game || "beatoraja"} · ${diag.method}` : ""}${noGameDir ? " · ⚠" : ""}</span>
             </div>
@@ -952,12 +1001,31 @@ dmn.plugin.defineElement({
     };
     setState({ _h_startServer: startServerId });
 
+    // ── 토글 바 핸들러 ──
+    const _togFlips = {};
+    const _TOG_KEYS = [
+      "showScore", "showJudge", "showPacemaker", "showClear", "showMiss",
+      "showGenre", "showKeys", "showBpm", "showNotes", "showTable",
+      "showDifficulty", "showStatusBar",
+    ];
+    const _togHandlerIds = {};
+    for (const key of _TOG_KEYS) {
+      const id = `__beatoraja_tog_${key}`;
+      window[id] = () => {
+        _togFlips[key] = !_togFlips[key];
+        setState({ _togFlips: { ..._togFlips }, _togHandlers: _togHandlerIds });
+      };
+      _togHandlerIds[key] = id;
+    }
+    setState({ _togHandlers: _togHandlerIds, _togFlips: {} });
+
     return () => {
       _stopPolling();
       _setState = null;
       _autoLaunchAttempted = false;
       unsubGlobal();
       delete window[startServerId];
+      for (const key of _TOG_KEYS) delete window[_togHandlerIds[key]];
     };
   },
 });
